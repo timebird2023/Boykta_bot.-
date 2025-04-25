@@ -1,0 +1,192 @@
+import requests
+import json
+import os
+from datetime import datetime, timedelta
+from telegram import Bot
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+
+# تعطيل تحذيرات SSL
+import urllib3
+urllib3.disable_warnings()
+
+# إعدادات البوت
+TELEGRAM_TOKEN = '7402560497:AAHsDY30_xgAVhUBo9dpmWWiaLsH3X3nR38'
+ADMIN_CHAT_ID = 7401831506
+DATA_FILE = 'gift_data.json'
+
+# استخدم Bot من مكتبة python-telegram-bot
+bot = Bot(token=TELEGRAM_TOKEN)
+
+def is_djezzy_number(number):
+    return number.startswith('07') and len(number) == 10 and number[1] in ['7', '8', '9']
+
+def send_otp(msisdn):
+    url = 'https://apim.djezzy.dz/oauth2/registration'
+    payload = f'msisdn={msisdn}&client_id=6E6CwTkp8H1CyQxraPmcEJPQ7xka&scope=smsotp'
+    headers = {
+        'User-Agent': 'Djezzy/2.6.7',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+    res = requests.post(url, data=payload, headers=headers, verify=False)
+    return res.status_code == 200
+
+def verify_otp(msisdn, otp):
+    url = 'https://apim.djezzy.dz/oauth2/token'
+    payload = f'otp={otp}&mobileNumber={msisdn}&scope=openid&client_id=6E6CwTkp8H1CyQxraPmcEJPQ7xka&client_secret=MVpXHW_ImuMsxKIwrJpoVVMHjRsa&grant_type=mobile'
+    headers = {
+        'User-Agent': 'Djezzy/2.6.7',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+    res = requests.post(url, data=payload, headers=headers, verify=False)
+    if res.status_code == 200:
+        return res.json()
+    return None
+
+def apply_gift(msisdn, token):
+    url = f'https://apim.djezzy.dz/djezzy-api/api/v1/subscribers/{msisdn}/subscription-product?include='
+    headers = {
+        'User-Agent': 'Djezzy/2.6.7',
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json',
+    }
+
+    gifts = [
+        {
+            "id": "TransferInternet2Go",
+            "type": "products",
+            "meta": {
+                "services": {
+                    "steps": 10000,
+                    "code": "FAMILY4000",
+                    "id": "WALKWIN"
+                }
+            }
+        },
+        {
+            "id": "TransferInternet2Go",
+            "type": "products",
+            "meta": {
+                "services": {
+                    "steps": 5000,
+                    "code": "WELCOME1GB",
+                    "id": "WALKWIN"
+                }
+            }
+        },
+        {
+            "id": "TransferInternet2Go",
+            "type": "products",
+            "meta": {
+                "services": {
+                    "steps": 2000,
+                    "code": "BONUS500MB",
+                    "id": "WALKWIN"
+                }
+            }
+        }
+    ]
+
+    results = []
+    for gift in gifts:
+        payload = {"data": gift}
+        res = requests.post(url, json=payload, headers=headers, verify=False)
+        results.append(res.json())
+
+    return results
+
+def load_log():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_log(log):
+    with open(DATA_FILE, 'w') as f:
+        json.dump(log, f)
+
+def start(update, context):
+    update.message.reply_text("أهلاً بك! أرسل رقم جيزي الخاص بك لبدء الحصول على هدية 3.5 جيغا إنترنت.")
+
+def gift_info(update, context):
+    update.message.reply_text("🎁 محتوى الهدية:\n- 2 جيغا (أساسية)\n- 1 جيغا إضافية\n- 500 ميغا إضافية\n- صالحة لمدة 30 دقيقة\n- متاحة مرة كل 30 دقيقة.")
+
+def handle_text(update, context):
+    text = update.message.text.strip()
+    chat_id = update.message.chat_id
+    log = load_log()
+    now = datetime.now()
+
+    if is_djezzy_number(text):
+        msisdn = '213' + text[1:]
+
+        if msisdn in log:
+            last_time = datetime.fromisoformat(log[msisdn].get("gift_applied", "1970-01-01T00:00:00"))
+            if now - last_time < timedelta(minutes=30):  # التعديل هنا لجعل الهدية متاحة كل 30 دقيقة
+                update.message.reply_text("⚠️ لقد استفدت من الهدية مسبقًا. حاول مرة أخرى بعد 30 دقيقة.")
+                return
+
+            otp_time = datetime.fromisoformat(log[msisdn].get("otp_time", "1970-01-01T00:00:00"))
+            if now - otp_time < timedelta(minutes=5):
+                update.message.reply_text("✅ OTP تم إرساله مسبقًا، يمكنك إدخال الرمز الآن.")
+            else:
+                update.message.reply_text("⏳ إرسال OTP جديد...")
+                if send_otp(msisdn):
+                    update.message.reply_text("✅ تم إرسال OTP. أرسل الرمز الآن.")
+                    log[msisdn]["otp_time"] = now.isoformat()
+                    save_log(log)
+                else:
+                    update.message.reply_text("❌ فشل في إرسال OTP.")
+        else:
+            update.message.reply_text("⏳ إرسال OTP...")
+            if send_otp(msisdn):
+                update.message.reply_text("✅ تم إرسال OTP. أرسل الرمز الآن.")
+                log[msisdn] = {
+                    "otp_time": now.isoformat(),
+                    "usage_count": 0
+                }
+                save_log(log)
+            else:
+                update.message.reply_text("❌ فشل في إرسال OTP.")
+        context.user_data['msisdn'] = msisdn
+
+    elif 'msisdn' in context.user_data:
+        msisdn = context.user_data['msisdn']
+        otp = text
+        tokens = verify_otp(msisdn, otp)
+
+        if tokens:
+            access_token = tokens['access_token']
+            results = apply_gift(msisdn, access_token)
+            success = any("successfully done" in r.get('message', '') for r in results)
+
+            if success:
+                update.message.reply_text("🎉 تم تفعيل الهدية بنجاح!\n✅ 3.5 جيغا إنترنت صالحة لمدة 30 دقيقة.")
+                log[msisdn]["gift_applied"] = now.isoformat()
+                log[msisdn]["usage_count"] = log[msisdn].get("usage_count", 0) + 1
+                save_log(log)
+            else:
+                update.message.reply_text("⚠️ لم يتم التفعيل. الرجاء المحاولة لاحقًا.")
+        else:
+            otp_time = datetime.fromisoformat(log.get(msisdn, {}).get("otp_time", "1970-01-01T00:00:00"))
+            if now - otp_time < timedelta(minutes=5):
+                update.message.reply_text("❌ كود OTP غير صحيح. حاول مرة أخرى.")
+            else:
+                update.message.reply_text("❌ كود OTP غير صحيح. أرسل رقمك مرة أخرى للحصول على كود جديد.")
+    else:
+        update.message.reply_text("❌ أدخل رقم جيزي أولاً (مثال: 077xxxxxxxx).")
+
+def main():
+    bot.send_message(chat_id=ADMIN_CHAT_ID, text="✅ البوت يعمل الآن على Pydroid3.")
+
+    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("gift", gift_info))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
