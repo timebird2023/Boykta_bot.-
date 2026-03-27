@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 # رابط استضافتك الأصلية (التي لا تدعم HTTPS)
 # هذا هو الرابط الذي سيحول له Vercel الطلبات
-TARGET_SERVER_URL = "http://noel.hidencloud.com:25151/webhook"
+TARGET_SERVER_URL = "http://noel.hidencloud.com:24674/webhook"
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def proxy_webhook():
